@@ -22,11 +22,12 @@ await seedDatabase();
 
 // Middleware
 app.use(
-  cors(
-    {
-  origin: true, // allow all routes and origins
-  methods: ['GET', 'POST', 'PUT', 'DELETE'], // allow only these methods
-  allowedHeaders: ['Content-Type', 'Authorization']
+  cors({
+    origin: process.env.ALLOWED_ORIGINS?.split(",") || [
+      "http://localhost:8080",
+      "http://localhost:3000",
+    ],
+    credentials: true,
   }),
 );
 
