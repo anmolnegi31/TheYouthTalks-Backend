@@ -1,5 +1,10 @@
 import mongoose from "mongoose";
 
+// Check if the model already exists
+if (mongoose.models.Category) {
+  delete mongoose.models.Category;
+}
+
 const categorySchema = new mongoose.Schema(
   {
     name: {
@@ -23,6 +28,12 @@ const categorySchema = new mongoose.Schema(
       trim: true,
       match: /^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/, // Hex color validation
     },
+    slug: {
+      type: String,
+      unique: true, // Keep this for unique constraint
+      trim: true,
+      lowercase: true,
+    },
     isActive: {
       type: Boolean,
       default: true,
@@ -38,16 +49,29 @@ const categorySchema = new mongoose.Schema(
   },
   {
     timestamps: true,
+    collection: "categories",
   },
 );
 
-// Index for better performance
+// Generate slug before saving
+categorySchema.pre("save", function (next) {
+  if (!this.slug) {
+    this.slug = this.name
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
+  }
+  next();
+});
+
+// Index for better performance (remove duplicate slug index)
 categorySchema.index({ isActive: 1, sortOrder: 1 });
 
 // Method to get form count
 categorySchema.methods.updateFormCount = async function () {
-  const Form = mongoose.model("Form");
-  this.formCount = await Form.countDocuments({
+  const SurveyForm = mongoose.model("SurveyForm");
+  this.formCount = await SurveyForm.countDocuments({
     category: this.name,
     isActive: true,
   });

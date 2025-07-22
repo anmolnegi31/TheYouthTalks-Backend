@@ -1,36 +1,19 @@
-import express from "express";
-import Form from "../models/Form.js";
+import SurveyForm from "../models/SurveyForm.js";
 import SurveyResponse from "../models/SurveyResponse.js";
-import jwt from "jsonwebtoken";
-
-const router = express.Router();
-
-// Middleware to extract user from token (optional for some routes)
-const extractUser = (req, res, next) => {
-  const token = req.header("Authorization")?.replace("Bearer ", "");
-
-  if (token) {
-    try {
-      const decoded = jwt.verify(
-        token,
-        process.env.JWT_SECRET || "your-secret-key",
-      );
-      req.userId = decoded.userId;
-    } catch (error) {
-      // Token invalid, but continue without user
-    }
-  }
-  next();
-};
 
 // @desc    Get all forms (public - for display)
 // @route   GET /api/forms
-// @access  Public
-router.get("/", async (req, res) => {
+// @access  Public with optional authentication
+export const getAllForms = async (req, res) => {
   try {
-    const { status, category, author, limit = 50, page = 1 } = req.query;
+    const { status, category, author, limit = 50, page = 1, myForms } = req.query;
 
-    const query = { isActive: true };
+    let query = { isActive: true };
+
+    // If user is authenticated and requests their own forms
+    if (myForms === "true" && req.userId) {
+      query.authorId = req.userId;
+    }
 
     if (status) query.status = status;
     if (category && category !== "all") query.category = category;
@@ -38,14 +21,14 @@ router.get("/", async (req, res) => {
 
     const skip = (page - 1) * limit;
 
-    const forms = await Form.find(query)
+    const forms = await SurveyForm.find(query)
       .select("-questions") // Don't include questions in list view
       .sort({ createdAt: -1 })
       .limit(parseInt(limit))
       .skip(skip)
       .populate("authorId", "name email");
 
-    const total = await Form.countDocuments(query);
+    const total = await SurveyForm.countDocuments(query);
 
     res.json({
       success: true,
@@ -56,6 +39,7 @@ router.get("/", async (req, res) => {
         total,
         pages: Math.ceil(total / limit),
       },
+      user: req.user ? { id: req.user._id, name: req.user.name, role: req.user.role } : null
     });
   } catch (error) {
     console.error("Get forms error:", error);
@@ -65,14 +49,14 @@ router.get("/", async (req, res) => {
       error: error.message,
     });
   }
-});
+};
 
 // @desc    Get single form with questions
 // @route   GET /api/forms/:id
-// @access  Public
-router.get("/:id", async (req, res) => {
+// @access  Public with optional authentication
+export const getFormById = async (req, res) => {
   try {
-    const form = await Form.findById(req.params.id).populate(
+    const form = await SurveyForm.findById(req.params.id).populate(
       "authorId",
       "name email",
     );
@@ -81,6 +65,16 @@ router.get("/:id", async (req, res) => {
       return res.status(404).json({
         success: false,
         message: "Form not found",
+        error: "FORM_NOT_FOUND"
+      });
+    }
+
+    // Check if user can view this form (if it's private)
+    if (form.status === "draft" && (!req.userId || (req.userId.toString() !== form.authorId?.toString() && req.user?.role !== "admin"))) {
+      return res.status(403).json({
+        success: false,
+        message: "This form is in draft mode and not publicly accessible.",
+        error: "DRAFT_ACCESS_DENIED"
       });
     }
 
@@ -90,6 +84,11 @@ router.get("/:id", async (req, res) => {
     res.json({
       success: true,
       data: form,
+      permissions: {
+        canEdit: req.userId && (req.userId.toString() === form.authorId?.toString() || req.user?.role === "admin"),
+        canDelete: req.userId && (req.userId.toString() === form.authorId?.toString() || req.user?.role === "admin"),
+        canViewAnalytics: req.userId && (req.userId.toString() === form.authorId?.toString() || req.user?.role === "admin")
+      }
     });
   } catch (error) {
     console.error("Get form error:", error);
@@ -99,16 +98,17 @@ router.get("/:id", async (req, res) => {
       error: error.message,
     });
   }
-});
+};
 
 // @desc    Create new form
 // @route   POST /api/forms
-// @access  Private (optional - can be public for demo)
-router.post("/", extractUser, async (req, res) => {
+// @access  Private (requires authentication)
+export const createForm = async (req, res) => {
   try {
     const formData = {
       ...req.body,
-      authorId: req.userId || null,
+      authorId: req.userId,
+      author: req.user.name
     };
 
     // If category is "Others", use customCategory
@@ -117,7 +117,7 @@ router.post("/", extractUser, async (req, res) => {
       delete formData.customCategory;
     }
 
-    const form = new Form(formData);
+    const form = new SurveyForm(formData);
     await form.save();
 
     res.status(201).json({
@@ -133,14 +133,34 @@ router.post("/", extractUser, async (req, res) => {
       error: error.message,
     });
   }
-});
+};
 
 // @desc    Update form
 // @route   PUT /api/forms/:id
-// @access  Private (optional - can be public for demo)
-router.put("/:id", extractUser, async (req, res) => {
+// @access  Private (requires ownership or admin)
+export const updateForm = async (req, res) => {
   try {
     const { id } = req.params;
+    
+    // Check if form exists and get ownership info
+    const existingForm = await SurveyForm.findById(id);
+    if (!existingForm) {
+      return res.status(404).json({
+        success: false,
+        message: "Form not found",
+        error: "FORM_NOT_FOUND"
+      });
+    }
+
+    // Check ownership or admin privilege
+    if (existingForm.authorId?.toString() !== req.userId.toString() && req.user.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. You can only update your own forms.",
+        error: "OWNERSHIP_REQUIRED"
+      });
+    }
+
     const updateData = { ...req.body };
 
     // If category is "Others", use customCategory
@@ -149,17 +169,10 @@ router.put("/:id", extractUser, async (req, res) => {
       delete updateData.customCategory;
     }
 
-    const form = await Form.findByIdAndUpdate(id, updateData, {
+    const form = await SurveyForm.findByIdAndUpdate(id, updateData, {
       new: true,
       runValidators: true,
     });
-
-    if (!form) {
-      return res.status(404).json({
-        success: false,
-        message: "Form not found",
-      });
-    }
 
     res.json({
       success: true,
@@ -174,25 +187,36 @@ router.put("/:id", extractUser, async (req, res) => {
       error: error.message,
     });
   }
-});
+};
 
 // @desc    Delete form
 // @route   DELETE /api/forms/:id
-// @access  Private (optional - can be public for demo)
-router.delete("/:id", extractUser, async (req, res) => {
+// @access  Private (requires ownership or admin)
+export const deleteForm = async (req, res) => {
   try {
-    const form = await Form.findByIdAndUpdate(
+    const existingForm = await SurveyForm.findById(req.params.id);
+    if (!existingForm) {
+      return res.status(404).json({
+        success: false,
+        message: "Form not found",
+        error: "FORM_NOT_FOUND"
+      });
+    }
+
+    // Check ownership or admin privilege
+    if (existingForm.authorId?.toString() !== req.userId.toString() && req.user.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. You can only delete your own forms.",
+        error: "OWNERSHIP_REQUIRED"
+      });
+    }
+
+    const form = await SurveyForm.findByIdAndUpdate(
       req.params.id,
       { isActive: false },
       { new: true },
     );
-
-    if (!form) {
-      return res.status(404).json({
-        success: false,
-        message: "Form not found",
-      });
-    }
 
     res.json({
       success: true,
@@ -206,26 +230,33 @@ router.delete("/:id", extractUser, async (req, res) => {
       error: error.message,
     });
   }
-});
+};
 
 // @desc    Get forms by status
 // @route   GET /api/forms/status/:status
-// @access  Public
-router.get("/status/:status", async (req, res) => {
+// @access  Public with optional authentication
+export const getFormsByStatus = async (req, res) => {
   try {
     const { status } = req.params;
-    const { limit = 20, page = 1 } = req.query;
+    const { limit = 20, page = 1, myForms } = req.query;
 
-    const query = { status, isActive: true };
+    let query = { status, isActive: true };
+    
+    // If user is authenticated and requests their own forms
+    if (myForms === "true" && req.userId) {
+      query.authorId = req.userId;
+    }
+
     const skip = (page - 1) * limit;
 
-    const forms = await Form.find(query)
+    const forms = await SurveyForm.find(query)
       .select("-questions")
       .sort({ createdAt: -1 })
       .limit(parseInt(limit))
-      .skip(skip);
+      .skip(skip)
+      .populate("authorId", "name email");
 
-    const total = await Form.countDocuments(query);
+    const total = await SurveyForm.countDocuments(query);
 
     res.json({
       success: true,
@@ -245,19 +276,29 @@ router.get("/status/:status", async (req, res) => {
       error: error.message,
     });
   }
-});
+};
 
 // @desc    Get form statistics
 // @route   GET /api/forms/:id/stats
-// @access  Public
-router.get("/:id/stats", async (req, res) => {
+// @access  Private (requires ownership or admin)
+export const getFormStats = async (req, res) => {
   try {
-    const form = await Form.findById(req.params.id);
+    const form = await SurveyForm.findById(req.params.id);
 
     if (!form) {
       return res.status(404).json({
         success: false,
         message: "Form not found",
+        error: "FORM_NOT_FOUND"
+      });
+    }
+
+    // Check ownership or admin privilege
+    if (form.authorId?.toString() !== req.userId.toString() && req.user.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. You can only view statistics for your own forms.",
+        error: "OWNERSHIP_REQUIRED"
       });
     }
 
@@ -270,7 +311,7 @@ router.get("/:id/stats", async (req, res) => {
           id: form._id,
           title: form.title,
           status: form.status,
-          responseCount: form.responseCount,
+          submissionCount: form.submissionCount,
           viewCount: form.viewCount,
         },
         analytics: analytics[0] || {
@@ -289,6 +330,4 @@ router.get("/:id/stats", async (req, res) => {
       error: error.message,
     });
   }
-});
-
-export default router;
+};
