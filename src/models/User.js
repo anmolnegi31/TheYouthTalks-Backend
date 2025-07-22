@@ -1,6 +1,11 @@
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
 
+// Check if the model already exists
+if (mongoose.models.User) {
+  delete mongoose.models.User;
+}
+
 const userSchema = new mongoose.Schema(
   {
     name: {
@@ -12,7 +17,7 @@ const userSchema = new mongoose.Schema(
     email: {
       type: String,
       required: true,
-      unique: true,
+      unique: true, // Keep this for unique constraint
       lowercase: true,
       trim: true,
       validate: {
@@ -29,8 +34,12 @@ const userSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ["admin", "user"],
+      enum: ["admin", "user", "brand"],
       default: "user",
+    },
+    isActive: {
+      type: Boolean,
+      default: true,
     },
     isEmailVerified: {
       type: Boolean,
@@ -44,14 +53,24 @@ const userSchema = new mongoose.Schema(
         type: Boolean,
         default: true,
       },
-      dailyReports: {
+      marketingEmails: {
         type: Boolean,
         default: false,
+      },
+      theme: {
+        type: String,
+        enum: ["light", "dark"],
+        default: "light",
+      },
+      language: {
+        type: String,
+        default: "en",
       },
     },
   },
   {
     timestamps: true,
+    collection: "users",
   },
 );
 
@@ -78,6 +97,9 @@ userSchema.methods.updateLastLogin = function () {
   this.lastLogin = new Date();
   return this.save();
 };
+
+// Index for better performance (remove duplicate email index)
+userSchema.index({ role: 1, isActive: 1 });
 
 const User = mongoose.model("User", userSchema);
 export default User;

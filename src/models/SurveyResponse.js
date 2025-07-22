@@ -1,5 +1,10 @@
 import mongoose from "mongoose";
 
+// Check if the model already exists
+if (mongoose.models.SurveyResponse) {
+  delete mongoose.models.SurveyResponse;
+}
+
 const responseAnswerSchema = new mongoose.Schema(
   {
     questionId: {
@@ -9,7 +14,7 @@ const responseAnswerSchema = new mongoose.Schema(
     questionType: {
       type: String,
       required: true,
-      enum: ["short", "long", "mcq", "rating", "checkbox", "dropdown"],
+      enum: ["paragraph", "multiple-choice", "rating", "checkbox", "number", "dropdown", "email", "phone"],
     },
     answer: {
       type: mongoose.Schema.Types.Mixed, // Can be String, Number, or Array
@@ -23,7 +28,7 @@ const surveyResponseSchema = new mongoose.Schema(
   {
     surveyId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "Form",
+      ref: "SurveyForm",
       required: true,
     },
     respondentId: {
@@ -80,21 +85,22 @@ const surveyResponseSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
+    collection: "surveyresponses",
   },
 );
 
 // Validate that response matches survey structure
 surveyResponseSchema.pre("save", async function (next) {
   try {
-    const Form = mongoose.model("Form");
-    const survey = await Form.findById(this.surveyId).select("questions");
+    const SurveyForm = mongoose.model("SurveyForm");
+    const survey = await SurveyForm.findById(this.surveyId).select("questions");
 
     if (!survey) {
       return next(new Error("Survey not found"));
     }
 
     // Validate required questions are answered
-    const requiredQuestions = survey.questions.filter((q) => q.required);
+    const requiredQuestions = survey.questions.filter((q) => q.isRequired);
     const answeredQuestionIds = this.responses.map((r) => r.questionId);
 
     for (const requiredQ of requiredQuestions) {

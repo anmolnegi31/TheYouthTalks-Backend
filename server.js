@@ -4,11 +4,11 @@ import dotenv from "dotenv";
 import connectDB from "./src/config/database.js";
 import seedDatabase from "./src/config/seedData.js";
 
-// Import routes
-import userRoutes from "./src/routes/userRoutes.js";
-import formRoutes from "./src/routes/formRoutes.js";
-import responseRoutes from "./src/routes/responseRoutes.js";
-import categoryRoutes from "./src/routes/categoryRoutes.js";
+// Import routes - using correct file names
+import user from "./src/routes/user.js";
+import surveyForm from "./src/routes/surveyForm.js";
+import surveyResponse from "./src/routes/surveyResponse.js";
+import category from "./src/routes/category.js";
 
 dotenv.config();
 
@@ -61,10 +61,10 @@ app.get("/health", (req, res) => {
 });
 
 // API Routes
-app.use("/api/users", userRoutes);
-app.use("/api/forms", formRoutes);
-app.use("/api/responses", responseRoutes);
-app.use("/api/categories", categoryRoutes);
+app.use("/api/users", user);
+app.use("/api/forms", surveyForm);
+app.use("/api/responses", surveyResponse);
+app.use("/api/categories", category);
 
 // Legacy endpoints for backward compatibility
 app.get("/api/ping", (req, res) => {
@@ -74,7 +74,7 @@ app.get("/api/ping", (req, res) => {
   });
 });
 
-// Error handling middleware
+// Enhanced error handling middleware
 app.use((err, req, res, next) => {
   console.error("Error:", err);
 
@@ -85,6 +85,7 @@ app.use((err, req, res, next) => {
       success: false,
       message: "Validation Error",
       errors,
+      error: "VALIDATION_ERROR"
     });
   }
 
@@ -94,6 +95,7 @@ app.use((err, req, res, next) => {
     return res.status(400).json({
       success: false,
       message: `${field} already exists`,
+      error: "DUPLICATE_KEY_ERROR"
     });
   }
 
@@ -102,6 +104,25 @@ app.use((err, req, res, next) => {
     return res.status(401).json({
       success: false,
       message: "Invalid token",
+      error: "INVALID_TOKEN"
+    });
+  }
+
+  if (err.name === "TokenExpiredError") {
+    return res.status(401).json({
+      success: false,
+      message: "Token has expired",
+      error: "TOKEN_EXPIRED",
+      expiredAt: err.expiredAt
+    });
+  }
+
+  // Cast error (invalid ObjectId)
+  if (err.name === "CastError") {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid ID format",
+      error: "INVALID_ID"
     });
   }
 
@@ -109,10 +130,7 @@ app.use((err, req, res, next) => {
   res.status(500).json({
     success: false,
     message: "Internal server error",
-    error:
-      process.env.NODE_ENV === "development"
-        ? err.message
-        : "Something went wrong",
+    error: process.env.NODE_ENV === "development" ? err.message : "INTERNAL_SERVER_ERROR",
   });
 });
 
@@ -121,6 +139,7 @@ app.use("*", (req, res) => {
   res.status(404).json({
     success: false,
     message: `Route ${req.originalUrl} not found`,
+    error: "ROUTE_NOT_FOUND"
   });
 });
 

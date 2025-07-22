@@ -1,5 +1,10 @@
 import mongoose from "mongoose";
 
+// Check if the model already exists
+if (mongoose.models.SurveyForm) {
+  delete mongoose.models.SurveyForm;
+}
+
 const optionSchema = new mongoose.Schema(
   {
     id: {
@@ -15,6 +20,30 @@ const optionSchema = new mongoose.Schema(
   { _id: false },
 );
 
+const validationSchema = new mongoose.Schema(
+  {
+    minLength: {
+      type: Number,
+      min: 0,
+    },
+    maxLength: {
+      type: Number,
+      min: 1,
+    },
+    minValue: {
+      type: Number,
+    },
+    maxValue: {
+      type: Number,
+    },
+    required: {
+      type: Boolean,
+      default: false,
+    },
+  },
+  { _id: false },
+);
+
 const questionSchema = new mongoose.Schema(
   {
     id: {
@@ -24,7 +53,7 @@ const questionSchema = new mongoose.Schema(
     type: {
       type: String,
       required: true,
-      enum: ["short", "long", "mcq", "rating", "checkbox", "dropdown"],
+      enum: ["paragraph", "multiple-choice", "rating", "checkbox", "number", "dropdown", "email", "phone"],
     },
     title: {
       type: String,
@@ -35,24 +64,25 @@ const questionSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
-    required: {
+    isRequired: {
       type: Boolean,
       default: false,
     },
-    options: [optionSchema], // For mcq, checkbox, dropdown
+    options: [optionSchema], // For multiple-choice, checkbox, dropdown
     maxRating: {
       type: Number,
       min: 1,
       max: 10,
       default: 5,
     },
+    validation: validationSchema,
   },
   { _id: false },
 );
 
 const settingsSchema = new mongoose.Schema(
   {
-    allowMultipleResponses: {
+    allowMultipleSubmissions: {
       type: Boolean,
       default: false,
     },
@@ -64,7 +94,11 @@ const settingsSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
-    thankYouMessage: {
+    shuffleQuestions: {
+      type: Boolean,
+      default: false,
+    },
+    confirmationMessage: {
       type: String,
       default: "Thank you for your response! We appreciate your time.",
     },
@@ -72,15 +106,27 @@ const settingsSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
-    dailyReports: {
+    generateReports: {
       type: Boolean,
-      default: false,
+      default: true,
+    },
+    collectEmail: {
+      type: Boolean,
+      default: true,
+    },
+    collectName: {
+      type: Boolean,
+      default: true,
+    },
+    isPublic: {
+      type: Boolean,
+      default: true,
     },
   },
   { _id: false },
 );
 
-const formSchema = new mongoose.Schema(
+const surveyFormSchema = new mongoose.Schema(
   {
     title: {
       type: String,
@@ -93,6 +139,10 @@ const formSchema = new mongoose.Schema(
       trim: true,
       maxlength: 1000,
     },
+    headerImage: {
+      type: String,
+      trim: true,
+    },
     author: {
       type: String,
       required: true,
@@ -101,6 +151,7 @@ const formSchema = new mongoose.Schema(
     authorId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
+      required: true,
     },
     headline: {
       type: String,
@@ -137,23 +188,23 @@ const formSchema = new mongoose.Schema(
         lowercase: true,
       },
     ],
-    startDate: {
+    publishDate: {
       type: Date,
       required: true,
     },
-    endDate: {
+    expiryDate: {
       type: Date,
       required: true,
       validate: {
-        validator: function (endDate) {
-          return endDate > this.startDate;
+        validator: function (expiryDate) {
+          return expiryDate > this.publishDate;
         },
-        message: "End date must be after start date",
+        message: "Expiry date must be after publish date",
       },
     },
     status: {
       type: String,
-      enum: ["draft", "live", "upcoming", "closed"],
+      enum: ["draft", "published", "scheduled", "closed"],
       default: "draft",
     },
     questions: [questionSchema],
@@ -161,13 +212,31 @@ const formSchema = new mongoose.Schema(
       type: settingsSchema,
       default: {},
     },
-    responseCount: {
+    submissionCount: {
       type: Number,
       default: 0,
     },
     viewCount: {
       type: Number,
       default: 0,
+    },
+    averageCompletionTime: {
+      type: Number,
+      default: 0,
+    },
+    completionRate: {
+      type: Number,
+      default: 0,
+    },
+    metaTitle: {
+      type: String,
+      trim: true,
+      maxlength: 60,
+    },
+    metaDescription: {
+      type: String,
+      trim: true,
+      maxlength: 160,
     },
     isActive: {
       type: Boolean,
@@ -176,19 +245,20 @@ const formSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
+    collection: "surveyforms",
   },
 );
 
 // Auto-update status based on dates
-formSchema.pre("save", function (next) {
+surveyFormSchema.pre("save", function (next) {
   const now = new Date();
 
-  if (this.startDate && this.endDate) {
-    if (now >= this.startDate && now <= this.endDate) {
-      this.status = "live";
-    } else if (now < this.startDate) {
-      this.status = "upcoming";
-    } else if (now > this.endDate) {
+  if (this.publishDate && this.expiryDate) {
+    if (now >= this.publishDate && now <= this.expiryDate && this.status !== "draft") {
+      this.status = "published";
+    } else if (now < this.publishDate && this.status !== "draft") {
+      this.status = "scheduled";
+    } else if (now > this.expiryDate) {
       this.status = "closed";
     }
   }
@@ -197,7 +267,7 @@ formSchema.pre("save", function (next) {
 });
 
 // Virtual for responses count
-formSchema.virtual("responses", {
+surveyFormSchema.virtual("responses", {
   ref: "SurveyResponse",
   localField: "_id",
   foreignField: "surveyId",
@@ -205,26 +275,28 @@ formSchema.virtual("responses", {
 });
 
 // Virtual for views count
-formSchema.virtual("views").get(function () {
+surveyFormSchema.virtual("views").get(function () {
   return this.viewCount;
 });
 
 // Method to increment view count
-formSchema.methods.incrementViews = function () {
+surveyFormSchema.methods.incrementViews = function () {
   this.viewCount += 1;
   return this.save();
 };
 
 // Method to increment response count
-formSchema.methods.incrementResponses = function () {
-  this.responseCount += 1;
+surveyFormSchema.methods.incrementResponses = function () {
+  this.submissionCount += 1;
   return this.save();
 };
 
 // Index for better performance
-formSchema.index({ status: 1, startDate: 1 });
-formSchema.index({ authorId: 1, createdAt: -1 });
-formSchema.index({ category: 1, status: 1 });
+surveyFormSchema.index({ status: 1, publishDate: 1 });
+surveyFormSchema.index({ authorId: 1, createdAt: -1 });
+surveyFormSchema.index({ category: 1, status: 1 });
+surveyFormSchema.index({ tags: 1 });
+surveyFormSchema.index({ isActive: 1, status: 1 });
 
-const Form = mongoose.model("Form", formSchema);
-export default Form;
+const SurveyForm = mongoose.model("SurveyForm", surveyFormSchema);
+export default SurveyForm;

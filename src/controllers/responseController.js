@@ -1,32 +1,10 @@
-import express from "express";
 import SurveyResponse from "../models/SurveyResponse.js";
-import Form from "../models/Form.js";
-import jwt from "jsonwebtoken";
-
-const router = express.Router();
-
-// Middleware to extract user from token (optional)
-const extractUser = (req, res, next) => {
-  const token = req.header("Authorization")?.replace("Bearer ", "");
-
-  if (token) {
-    try {
-      const decoded = jwt.verify(
-        token,
-        process.env.JWT_SECRET || "your-secret-key",
-      );
-      req.userId = decoded.userId;
-    } catch (error) {
-      // Token invalid, but continue without user
-    }
-  }
-  next();
-};
+import SurveyForm from "../models/SurveyForm.js";
 
 // @desc    Submit survey response
 // @route   POST /api/responses
-// @access  Public
-router.post("/", extractUser, async (req, res) => {
+// @access  Public with optional authentication
+export const submitResponse = async (req, res) => {
   try {
     const {
       surveyId,
@@ -38,25 +16,27 @@ router.post("/", extractUser, async (req, res) => {
     } = req.body;
 
     // Validate survey exists and is active
-    const survey = await Form.findById(surveyId);
+    const survey = await SurveyForm.findById(surveyId);
     if (!survey || !survey.isActive) {
       return res.status(404).json({
         success: false,
         message: "Survey not found or inactive",
+        error: "SURVEY_NOT_FOUND"
       });
     }
 
-    // Check if survey is currently live
-    if (survey.status !== "live") {
+    // Check if survey is currently published
+    if (survey.status !== "published") {
       return res.status(400).json({
         success: false,
         message: "Survey is not currently accepting responses",
+        error: "SURVEY_NOT_LIVE"
       });
     }
 
     // Check for duplicate responses if not allowed
     if (
-      !survey.settings.allowMultipleResponses &&
+      !survey.settings.allowMultipleSubmissions &&
       (req.userId || respondentEmail)
     ) {
       const existingResponse = await SurveyResponse.findOne({
@@ -71,6 +51,7 @@ router.post("/", extractUser, async (req, res) => {
         return res.status(400).json({
           success: false,
           message: "You have already responded to this survey",
+          error: "DUPLICATE_RESPONSE"
         });
       }
     }
@@ -79,8 +60,8 @@ router.post("/", extractUser, async (req, res) => {
     const surveyResponse = new SurveyResponse({
       surveyId,
       respondentId: req.userId || null,
-      respondentEmail,
-      respondentName,
+      respondentEmail: respondentEmail || req.user?.email,
+      respondentName: respondentName || req.user?.name,
       responses,
       timeTaken,
       ipAddress: req.ip,
@@ -109,15 +90,33 @@ router.post("/", extractUser, async (req, res) => {
       error: error.message,
     });
   }
-});
+};
 
 // @desc    Get responses for a survey
 // @route   GET /api/responses/survey/:surveyId
-// @access  Public (for demo - should be private in production)
-router.get("/survey/:surveyId", async (req, res) => {
+// @access  Private (requires form ownership or admin)
+export const getResponsesBySurvey = async (req, res) => {
   try {
     const { surveyId } = req.params;
     const { limit = 50, page = 1, includeDetails = false } = req.query;
+
+    // Check if user owns the form or is admin
+    const form = await SurveyForm.findById(surveyId);
+    if (!form) {
+      return res.status(404).json({
+        success: false,
+        message: "Survey not found",
+        error: "SURVEY_NOT_FOUND"
+      });
+    }
+
+    if (form.authorId?.toString() !== req.userId.toString() && req.user.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. You can only view responses for your own surveys.",
+        error: "OWNERSHIP_REQUIRED"
+      });
+    }
 
     const skip = (page - 1) * limit;
 
@@ -154,21 +153,35 @@ router.get("/survey/:surveyId", async (req, res) => {
       error: error.message,
     });
   }
-});
+};
 
 // @desc    Get single response details
 // @route   GET /api/responses/:id
-// @access  Public (for demo - should be private in production)
-router.get("/:id", async (req, res) => {
+// @access  Private (requires form ownership, response ownership, or admin)
+export const getResponseById = async (req, res) => {
   try {
     const response = await SurveyResponse.findById(req.params.id)
-      .populate("surveyId", "title questions")
+      .populate("surveyId", "title questions authorId")
       .populate("respondentId", "name email");
 
     if (!response) {
       return res.status(404).json({
         success: false,
         message: "Response not found",
+        error: "RESPONSE_NOT_FOUND"
+      });
+    }
+
+    // Check permissions: form owner, response owner, or admin
+    const isFormOwner = response.surveyId.authorId?.toString() === req.userId.toString();
+    const isResponseOwner = response.respondentId?.toString() === req.userId.toString();
+    const isAdmin = req.user.role === "admin";
+
+    if (!isFormOwner && !isResponseOwner && !isAdmin) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. You can only view your own responses or responses to your surveys.",
+        error: "OWNERSHIP_REQUIRED"
       });
     }
 
@@ -184,14 +197,79 @@ router.get("/:id", async (req, res) => {
       error: error.message,
     });
   }
-});
+};
+
+// @desc    Get user's own responses
+// @route   GET /api/responses/my-responses
+// @access  Private (requires authentication)
+export const getMyResponses = async (req, res) => {
+  try {
+    const { limit = 50, page = 1 } = req.query;
+    const skip = (page - 1) * limit;
+
+    const responses = await SurveyResponse.find({ 
+      $or: [
+        { respondentId: req.userId },
+        { respondentEmail: req.user.email }
+      ]
+    })
+      .select("surveyId submittedAt timeTaken isComplete")
+      .sort({ submittedAt: -1 })
+      .limit(parseInt(limit))
+      .skip(skip)
+      .populate("surveyId", "title description category status");
+
+    const total = await SurveyResponse.countDocuments({ 
+      $or: [
+        { respondentId: req.userId },
+        { respondentEmail: req.user.email }
+      ]
+    });
+
+    res.json({
+      success: true,
+      data: responses,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / limit),
+      },
+    });
+  } catch (error) {
+    console.error("Get user responses error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
+};
 
 // @desc    Get response analytics for a survey
 // @route   GET /api/responses/analytics/:surveyId
-// @access  Public (for demo - should be private in production)
-router.get("/analytics/:surveyId", async (req, res) => {
+// @access  Private (requires form ownership or admin)
+export const getResponseAnalytics = async (req, res) => {
   try {
     const { surveyId } = req.params;
+
+    // Check if user owns the form or is admin
+    const survey = await SurveyForm.findById(surveyId).select("questions title authorId");
+    if (!survey) {
+      return res.status(404).json({
+        success: false,
+        message: "Survey not found",
+        error: "SURVEY_NOT_FOUND"
+      });
+    }
+
+    if (survey.authorId?.toString() !== req.userId.toString() && req.user.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. You can only view analytics for your own surveys.",
+        error: "OWNERSHIP_REQUIRED"
+      });
+    }
 
     // Get basic analytics
     const analytics = await SurveyResponse.getAnalytics(surveyId);
@@ -200,15 +278,6 @@ router.get("/analytics/:surveyId", async (req, res) => {
     const responses = await SurveyResponse.find({ surveyId }).select(
       "responses submittedAt timeTaken",
     );
-
-    const survey = await Form.findById(surveyId).select("questions title");
-
-    if (!survey) {
-      return res.status(404).json({
-        success: false,
-        message: "Survey not found",
-      });
-    }
 
     // Analyze each question
     const questionAnalysis = survey.questions.map((question) => {
@@ -223,7 +292,7 @@ router.get("/analytics/:surveyId", async (req, res) => {
         totalResponses: questionResponses.length,
       };
 
-      if (question.type === "mcq" || question.type === "dropdown") {
+      if (question.type === "multiple-choice" || question.type === "dropdown") {
         // Count option frequencies
         const optionCounts = {};
         questionResponses.forEach((resp) => {
@@ -283,26 +352,36 @@ router.get("/analytics/:surveyId", async (req, res) => {
       error: error.message,
     });
   }
-});
+};
 
 // @desc    Export responses as CSV
 // @route   GET /api/responses/export/:surveyId
-// @access  Public (for demo - should be private in production)
-router.get("/export/:surveyId", async (req, res) => {
+// @access  Private (requires form ownership or admin)
+export const exportResponses = async (req, res) => {
   try {
     const { surveyId } = req.params;
 
-    const survey = await Form.findById(surveyId).select("title questions");
-    const responses = await SurveyResponse.find({ surveyId })
-      .populate("respondentId", "name email")
-      .sort({ submittedAt: -1 });
-
+    const survey = await SurveyForm.findById(surveyId).select("title questions authorId");
     if (!survey) {
       return res.status(404).json({
         success: false,
         message: "Survey not found",
+        error: "SURVEY_NOT_FOUND"
       });
     }
+
+    // Check ownership or admin privilege
+    if (survey.authorId?.toString() !== req.userId.toString() && req.user.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. You can only export responses for your own surveys.",
+        error: "OWNERSHIP_REQUIRED"
+      });
+    }
+
+    const responses = await SurveyResponse.find({ surveyId })
+      .populate("respondentId", "name email")
+      .sort({ submittedAt: -1 });
 
     // Create CSV header
     const headers = [
@@ -364,6 +443,4 @@ router.get("/export/:surveyId", async (req, res) => {
       error: error.message,
     });
   }
-});
-
-export default router;
+};
