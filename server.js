@@ -40,6 +40,16 @@ app.use((req, res, next) => {
   next();
 });
 
+// Base API Info Endpoint
+app.get("/api", (req, res) => {
+  res.json({
+    success: true,
+    message: "Youth Talks API Base Endpoint",
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || "development",
+  });
+});
+
 // Health check endpoint
 app.get("/health", (req, res) => {
   res.json({
