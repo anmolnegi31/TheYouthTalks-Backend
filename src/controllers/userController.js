@@ -4,11 +4,7 @@ import { generateAccessToken } from "../utils/tokenUtils.js";
 // @desc    Register new user
 // @route   POST /api/users/register
 // @access  Public
-<<<<<<< HEAD:src/routes/userRoutes.js
-router.post("/register",  async (req, res) => {
-=======
 export const registerUser = async (req, res) => {
->>>>>>> 05aa7a0c0cca0db0e496a700cb711738e96173d7:src/controllers/userController.js
   try {
     const { name, email, password, role } = req.body;
 
