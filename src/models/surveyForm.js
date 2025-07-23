@@ -53,7 +53,7 @@ const questionSchema = new mongoose.Schema(
     type: {
       type: String,
       required: true,
-      enum: ["paragraph", "multiple-choice", "rating", "checkbox", "number", "dropdown", "email", "phone"],
+      enum: ["text", "paragraph", "multiple-choice", "rating", "checkbox", "number", "dropdown", "email", "phone", "date"],
     },
     title: {
       type: String,
