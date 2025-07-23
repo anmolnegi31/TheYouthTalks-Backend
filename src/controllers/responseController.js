@@ -1,5 +1,5 @@
 import SurveyResponse from "../models/SurveyResponse.js";
-import SurveyForm from "../models/SurveyForm.js";
+import SurveyForm from "../models/surveyForm.js";
 
 // @desc    Submit survey response
 // @route   POST /api/responses

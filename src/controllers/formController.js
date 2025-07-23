@@ -1,4 +1,4 @@
-import SurveyForm from "../models/SurveyForm.js";
+import SurveyForm from "../models/surveyForm.js";
 import SurveyResponse from "../models/SurveyResponse.js";
 
 // @desc    Get all forms (public - for display)
