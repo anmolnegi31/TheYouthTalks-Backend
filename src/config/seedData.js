@@ -1,5 +1,5 @@
 import User from "../models/User.js";
-import SurveyForm from "../models/SurveyForm.js";
+import SurveyForm from "../models/surveyForm.js";
 import Category from "../models/Category.js";
 import SurveyResponse from "../models/SurveyResponse.js";
 

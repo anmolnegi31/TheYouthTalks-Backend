@@ -1,5 +1,5 @@
 # Use the official Node.js image from the Docker Hub
-FROM node:14
+FROM node:16
 
 # Create and change to the app directory
 WORKDIR /usr/src/app
@@ -14,7 +14,10 @@ RUN npm install
 COPY . .
 
 # Expose the port the app runs on
-EXPOSE 3000
+EXPOSE 8080
+
+# Set environment variable for port
+ENV PORT=8080
 
 # Command to run the application
 CMD ["node", "server.js"]
