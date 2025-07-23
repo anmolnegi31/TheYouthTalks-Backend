@@ -67,11 +67,61 @@ const userSchema = new mongoose.Schema(
         default: "en",
       },
     },
+    // Brand-specific fields (only populated for brand users)
+    brandDetails: {
+      companyName: {
+        type: String,
+        trim: true,
+      },
+      website: {
+        type: String,
+        trim: true,
+      },
+      industry: {
+        type: String,
+        trim: true,
+      },
+      logo: {
+        type: String,
+        trim: true,
+      },
+      size: {
+        type: String,
+        enum: ["1-10", "11-50", "51-200", "201-500", "501-1000", "1000+"],
+      },
+      // Add these fields
+      companySize: {
+        type: String,
+        trim: true,
+      },
+      foundedYear: {
+        type: Number,
+      },
+      location: {
+        type: String,
+        trim: true,
+      },
+      description: {
+        type: String,
+        trim: true,
+      },
+      contactPhone: {
+        type: String,
+        trim: true,
+      },
+      address: {
+        street: String,
+        city: String,
+        state: String,
+        country: String,
+        zipCode: String,
+      },
+    },
   },
   {
     timestamps: true,
     collection: "users",
-  },
+  }
 );
 
 // Hash password before saving

@@ -9,10 +9,10 @@ import {
 export const authenticate = async (req, res, next) => {
   try {
     const authHeader = req.header("Authorization");
-    console.log("Auth header received:", authHeader);
+    // console.log("Auth header received:", authHeader);
     
     const token = extractTokenFromHeader(authHeader);
-    console.log("Extracted token:", token ? `${token.substring(0, 10)}...` : "null");
+    // console.log("Extracted token:", token ? `${token.substring(0, 10)}...` : "null");
 
     if (!token) {
       return res.status(401).json({

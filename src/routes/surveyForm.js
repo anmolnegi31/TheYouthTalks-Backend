@@ -8,6 +8,7 @@ import {
   deleteForm,
   getFormsByStatus,
   getFormStats,
+  getBrandForms,
 } from "../controllers/formController.js";
 
 const router = express.Router();
@@ -17,38 +18,25 @@ const router = express.Router();
 // @access  Public with optional authentication
 router.get("/", optionalAuth, getAllForms);
 
+// @desc    Get all forms of brand
+// @route   GET /api/forms/brand-forms
+// @access  Private (requires brand role)
+router.get("/brand-forms", authenticate, isBrand, getBrandForms);
+
+// @desc    Get forms by status
+// @route   GET /api/forms/status/:status
+// @access  Public with optional authentication
+router.get("/status/:status", optionalAuth, getFormsByStatus);
+
+// @desc    Get form statistics
+// @route   GET /api/forms/:id/stats
+// @access  Private (requires ownership or admin)
+router.get("/:id/stats", authenticate, isBrand, getFormStats);
+
 // @desc    Get single form with questions
 // @route   GET /api/forms/:id
 // @access  Public with optional authentication
 router.get("/:id", optionalAuth, getFormById);
-
-// @desc    Get all form with questions of brand, use id from auth middleware
-// @route   GET /api/forms
-// @access  Public with optional authentication
-
-router.get("/brand", optionalAuth, async (req, res) => {
-  try {
-    if (!req.user || !req.user.brandId) {
-      return res.status(401).json({
-        success: false,
-        message: "Unauthorized access",
-        error: "UNAUTHORIZED",
-      });
-    }
-    const forms = await getAllForms(req.user.brandId);
-    res.json({
-      success: true,
-      forms,
-    });
-  } catch (error) {
-    console.error("Error fetching brand forms:", error);
-    res.status(500).json({
-      success: false,
-      message: "Server error",
-      error: error.message,
-    });
-  }
-});
 
 // @desc    Create new form
 // @route   POST /api/forms
@@ -64,15 +52,5 @@ router.put("/:id", authenticate, isBrand, updateForm);
 // @route   DELETE /api/forms/:id
 // @access  Private (requires ownership or admin)
 router.delete("/:id", authenticate, isBrand, deleteForm);
-
-// @desc    Get forms by status
-// @route   GET /api/forms/status/:status
-// @access  Public with optional authentication
-router.get("/status/:status", optionalAuth, getFormsByStatus);
-
-// @desc    Get form statistics
-// @route   GET /api/forms/:id/stats
-// @access  Private (requires ownership or admin)
-router.get("/:id/stats", authenticate, isBrand, getFormStats);
 
 export default router;
