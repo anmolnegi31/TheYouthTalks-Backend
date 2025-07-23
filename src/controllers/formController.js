@@ -331,3 +331,30 @@ export const getFormStats = async (req, res) => {
     });
   }
 };
+
+// @desc    Get all forms of a brand
+// @route   GET /api/forms/brand-forms
+// @access  Private (requires brand role)
+export const getBrandForms = async (req, res) => {
+  try {
+    if (!req.user || !req.user.brandId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized access",
+        error: "UNAUTHORIZED",
+      });
+    }
+    const forms = await getAllForms(req.user.brandId);
+    res.json({
+      success: true,
+      forms,
+    });
+  } catch (error) {
+    console.error("Error fetching brand forms:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
+};
