@@ -195,12 +195,6 @@ const surveyFormSchema = new mongoose.Schema(
     expiryDate: {
       type: Date,
       required: true,
-      validate: {
-        validator: function (expiryDate) {
-          return expiryDate > this.publishDate;
-        },
-        message: "Expiry date must be after publish date",
-      },
     },
     status: {
       type: String,

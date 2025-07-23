@@ -9,6 +9,10 @@ import {
   getFormsByStatus,
   getFormStats,
   getBrandForms,
+  changeFormStatus,
+  publishForm,
+  unpublishForm,
+  closeForm,
 } from "../controllers/formController.js";
 
 const router = express.Router();
@@ -32,6 +36,26 @@ router.get("/status/:status", optionalAuth, getFormsByStatus);
 // @route   GET /api/forms/:id/stats
 // @access  Private (requires ownership or admin)
 router.get("/:id/stats", authenticate, isBrand, getFormStats);
+
+// @desc    Change form status
+// @route   PATCH /api/forms/:id/status
+// @access  Private (requires ownership or admin)
+router.patch("/:id/status", authenticate, isBrand, changeFormStatus);
+
+// @desc    Publish form
+// @route   PATCH /api/forms/:id/publish
+// @access  Private (requires ownership or admin)
+router.patch("/:id/publish", authenticate, isBrand, publishForm);
+
+// @desc    Unpublish form (set to draft)
+// @route   PATCH /api/forms/:id/unpublish
+// @access  Private (requires ownership or admin)
+router.patch("/:id/unpublish", authenticate, isBrand, unpublishForm);
+
+// @desc    Close form
+// @route   PATCH /api/forms/:id/close
+// @access  Private (requires ownership or admin)
+router.patch("/:id/close", authenticate, isBrand, closeForm);
 
 // @desc    Get single form with questions
 // @route   GET /api/forms/:id

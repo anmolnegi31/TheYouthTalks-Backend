@@ -11,18 +11,15 @@ const tokenSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      index: true,
     },
     token: {
       type: String,
       required: true,
-      unique: true,
-      index: true,
+      unique: true, // This already creates an index, so no need for explicit index below
     },
     hashedToken: {
       type: String,
       required: true,
-      index: true,
     },
     type: {
       type: String,
@@ -33,12 +30,10 @@ const tokenSchema = new mongoose.Schema(
     isActive: {
       type: Boolean,
       default: true,
-      index: true,
     },
     expiresAt: {
       type: Date,
       required: true,
-      index: true,
     },
     ipAddress: {
       type: String,
@@ -51,6 +46,10 @@ const tokenSchema = new mongoose.Schema(
     lastUsedAt: {
       type: Date,
       default: Date.now,
+    },
+    usageCount: {
+      type: Number,
+      default: 0,
     },
     deviceInfo: {
       type: String,
@@ -72,7 +71,12 @@ const tokenSchema = new mongoose.Schema(
 
 // Compound indexes for better performance
 tokenSchema.index({ userId: 1, type: 1, isActive: 1 });
-tokenSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 }); // TTL index
+// Remove this line: tokenSchema.index({ token: 1 }); // Duplicate because of unique: true above
+tokenSchema.index({ hashedToken: 1 });
+tokenSchema.index({ isActive: 1 });
+
+// TTL index for automatic expiration
+tokenSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 // Methods
 tokenSchema.methods.revoke = function (reason = "manual") {
@@ -84,10 +88,19 @@ tokenSchema.methods.revoke = function (reason = "manual") {
 
 tokenSchema.methods.updateLastUsed = function () {
   this.lastUsedAt = new Date();
+  this.usageCount += 1;
   return this.save();
 };
 
 // Static methods
+tokenSchema.statics.findActiveToken = function (hashedToken) {
+  return this.findOne({
+    hashedToken,
+    isActive: true,
+    expiresAt: { $gt: new Date() },
+  });
+};
+
 tokenSchema.statics.revokeAllUserTokens = function (userId, reason = "manual") {
   return this.updateMany(
     { userId, isActive: true },

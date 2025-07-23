@@ -1,7 +1,6 @@
 import cron from 'node-cron';
 import { 
   cleanupExpiredAccessTokens,
-  cleanupExpiredRefreshTokens,
   cleanupRevokedTokens,
   cleanupInactiveSessions,
   cleanupOverusedTokens,
@@ -34,25 +33,6 @@ export const initializeCleanupSchedulers = () => {
     timezone: "UTC"
   });
 
-  // Cleanup expired refresh tokens every 24 hours
-  const refreshTokenCleanup = cron.schedule('0 0 * * *', async () => {
-    console.log('Running scheduled refresh token cleanup...');
-    const stats = await getTokenStats();
-    if (stats) {
-      console.log('Before cleanup:', stats);
-    }
-    
-    const cleaned = await cleanupExpiredRefreshTokens();
-    
-    const newStats = await getTokenStats();
-    if (newStats) {
-      console.log('After cleanup:', newStats);
-    }
-  }, {
-    scheduled: false,
-    timezone: "UTC"
-  });
-
   // Cleanup revoked tokens every 12 hours
   const revokedTokenCleanup = cron.schedule('0 */12 * * *', async () => {
     console.log('Running scheduled revoked token cleanup...');
@@ -71,7 +51,7 @@ export const initializeCleanupSchedulers = () => {
     timezone: "UTC"
   });
 
-  // Cleanup overused tokens every 24 hours
+  // Cleanup overused tokens every 24 hours at 00:30
   const overusedTokenCleanup = cron.schedule('30 0 * * *', async () => {
     console.log('Running scheduled overused token cleanup...');
     await cleanupOverusedTokens();
@@ -93,7 +73,6 @@ export const initializeCleanupSchedulers = () => {
   // Store job references
   cleanupJobs = [
     accessTokenCleanup, 
-    refreshTokenCleanup, 
     revokedTokenCleanup,
     sessionCleanup, 
     overusedTokenCleanup,
@@ -102,7 +81,6 @@ export const initializeCleanupSchedulers = () => {
 
   // Start all jobs
   accessTokenCleanup.start();
-  refreshTokenCleanup.start();
   revokedTokenCleanup.start();
   sessionCleanup.start();
   overusedTokenCleanup.start();
@@ -110,7 +88,6 @@ export const initializeCleanupSchedulers = () => {
 
   console.log('Token cleanup schedulers initialized:');
   console.log('- Access tokens: Every hour');
-  console.log('- Refresh tokens: Every 24 hours');
   console.log('- Revoked tokens: Every 12 hours');
   console.log('- Sessions: Every 6 hours');
   console.log('- Overused tokens: Every 24 hours (00:30)');
@@ -135,9 +112,8 @@ export const triggerManualCleanup = async () => {
   const stats = await getTokenStats();
   console.log('Before manual cleanup:', stats);
   
-  const [accessCleaned, refreshCleaned, revokedCleaned, sessionCleaned, overusedCleaned] = await Promise.all([
+  const [accessCleaned, revokedCleaned, sessionCleaned, overusedCleaned] = await Promise.all([
     cleanupExpiredAccessTokens(),
-    cleanupExpiredRefreshTokens(),
     cleanupRevokedTokens(),
     cleanupInactiveSessions(),
     cleanupOverusedTokens()
@@ -148,7 +124,6 @@ export const triggerManualCleanup = async () => {
   
   return {
     accessTokensCleaned: accessCleaned,
-    refreshTokensCleaned: refreshCleaned,
     revokedTokensCleaned: revokedCleaned,
     sessionsCleaned: sessionCleaned,
     overusedTokensCleaned: overusedCleaned,

@@ -15,6 +15,15 @@ export const submitResponse = async (req, res) => {
       deviceInfo,
     } = req.body;
 
+    // Validate required fields
+    if (!surveyId || !responses || !Array.isArray(responses)) {
+      return res.status(400).json({
+        success: false,
+        message: "Survey ID and responses are required",
+        error: "MISSING_REQUIRED_FIELDS"
+      });
+    }
+    
     // Validate survey exists and is active
     const survey = await SurveyForm.findById(surveyId);
     if (!survey || !survey.isActive) {
@@ -35,40 +44,67 @@ export const submitResponse = async (req, res) => {
     }
 
     // Check for duplicate responses if not allowed
-    if (
-      !survey.settings.allowMultipleSubmissions &&
-      (req.userId || respondentEmail)
-    ) {
-      const existingResponse = await SurveyResponse.findOne({
-        surveyId,
-        $or: [
-          { respondentId: req.userId },
-          { respondentEmail: respondentEmail },
-        ],
-      });
-
-      if (existingResponse) {
-        return res.status(400).json({
-          success: false,
-          message: "You have already responded to this survey",
-          error: "DUPLICATE_RESPONSE"
-        });
+    if (!survey.settings.allowMultipleSubmissions) {
+      const duplicateQuery = { surveyId };
+      
+      // Build query based on available identifiers
+      const orConditions = [];
+      
+      if (req.userId) {
+        orConditions.push({ respondentId: req.userId });
+      }
+      
+      if (respondentEmail) {
+        orConditions.push({ respondentEmail: respondentEmail });
+      }
+      
+      // Only check for duplicates if we have some way to identify the user
+      if (orConditions.length > 0) {
+        duplicateQuery.$or = orConditions;
+        
+        const existingResponse = await SurveyResponse.findOne(duplicateQuery);
+        
+        if (existingResponse) {
+          return res.status(400).json({
+            success: false,
+            message: "You have already responded to this survey",
+            error: "DUPLICATE_RESPONSE"
+          });
+        }
       }
     }
 
-    // Create response
-    const surveyResponse = new SurveyResponse({
+    // Prepare response data - handle both authenticated and anonymous users
+    const responseData = {
       surveyId,
-      respondentId: req.userId || null,
-      respondentEmail: respondentEmail || req.user?.email,
-      respondentName: respondentName || req.user?.name,
       responses,
       timeTaken,
       ipAddress: req.ip,
       userAgent: req.get("User-Agent"),
       deviceInfo,
-    });
+    };
 
+    // Add user information if available (authenticated user)
+    if (req.userId && req.user) {
+      responseData.respondentId = req.userId;
+      responseData.respondentEmail = respondentEmail || req.user.email;
+      responseData.respondentName = respondentName || req.user.name;
+    } else {
+      // Anonymous user - require email and name in request body
+      if (!respondentEmail || !respondentName) {
+        return res.status(400).json({
+          success: false,
+          message: "Email and name are required for anonymous responses",
+          error: "ANONYMOUS_USER_INFO_REQUIRED"
+        });
+      }
+      responseData.respondentEmail = respondentEmail;
+      responseData.respondentName = respondentName;
+      responseData.respondentId = null;
+    }
+
+    // Create response
+    const surveyResponse = new SurveyResponse(responseData);
     await surveyResponse.save();
 
     // Increment form response count
@@ -383,58 +419,149 @@ export const exportResponses = async (req, res) => {
       .populate("respondentId", "name email")
       .sort({ submittedAt: -1 });
 
-    // Create CSV header
-    const headers = [
+    if (responses.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "No responses found for this survey",
+        error: "NO_RESPONSES_FOUND"
+      });
+    }
+
+    // Create comprehensive CSV headers
+    const baseHeaders = [
       "Response ID",
       "Respondent Name",
       "Respondent Email",
       "Submitted At",
       "Time Taken (minutes)",
-      ...survey.questions.map((q) => q.title),
+      "Completion Status",
+      "Device Type",
+      "Browser",
+      "IP Address"
     ];
 
-    // Create CSV rows
+    // Add question headers with question type info
+    const questionHeaders = survey.questions.map((q, index) => {
+      const questionNumber = `Q${index + 1}`;
+      const questionTitle = q.title.replace(/[,"\r\n]/g, ' ').trim();
+      const questionType = `[${q.type.toUpperCase()}]`;
+      return `${questionNumber}: ${questionTitle} ${questionType}`;
+    });
+
+    const headers = [...baseHeaders, ...questionHeaders];
+
+    // Create CSV rows with enhanced data
     const rows = responses.map((response) => {
       const row = [
         response._id,
         response.respondentName || response.respondentId?.name || "Anonymous",
-        response.respondentEmail || response.respondentId?.email || "",
-        response.submittedAt.toISOString(),
-        response.timeTaken || 0,
+        response.respondentEmail || response.respondentId?.email || "Not provided",
+        new Date(response.submittedAt).toLocaleString('en-US', {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          timeZone: 'UTC'
+        }),
+        response.timeTaken ? Math.round(response.timeTaken * 100) / 100 : 0,
+        response.isComplete ? "Complete" : "Incomplete",
+        response.deviceInfo?.type || "Unknown",
+        response.deviceInfo?.browser || "Unknown",
+        response.ipAddress || "Not recorded"
       ];
 
-      // Add answers for each question
+      // Add answers for each question in order
       survey.questions.forEach((question) => {
-        const answer = response.responses.find(
-          (r) => r.questionId === question.id,
+        const responseAnswer = response.responses.find(
+          (r) => r.questionId === question.id
         );
-        if (answer) {
-          if (Array.isArray(answer.answer)) {
-            row.push(answer.answer.join("; "));
-          } else {
-            row.push(answer.answer);
+
+        if (responseAnswer && responseAnswer.answer !== null && responseAnswer.answer !== undefined) {
+          let formattedAnswer = "";
+          
+          // Handle different question types appropriately
+          switch (question.type) {
+            case "checkbox":
+              if (Array.isArray(responseAnswer.answer)) {
+                formattedAnswer = responseAnswer.answer.join("; ");
+              } else {
+                formattedAnswer = String(responseAnswer.answer);
+              }
+              break;
+              
+            case "rating":
+              formattedAnswer = `${responseAnswer.answer}/10`;
+              break;
+              
+            case "multiple-choice":
+            case "dropdown":
+              formattedAnswer = String(responseAnswer.answer);
+              break;
+              
+            case "text":
+            case "email":
+            case "number":
+              formattedAnswer = String(responseAnswer.answer);
+              break;
+              
+            case "paragraph":
+              // Clean up paragraph text for CSV
+              formattedAnswer = String(responseAnswer.answer)
+                .replace(/[\r\n]+/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+              break;
+              
+            case "date":
+              if (responseAnswer.answer) {
+                try {
+                  formattedAnswer = new Date(responseAnswer.answer).toLocaleDateString();
+                } catch (e) {
+                  formattedAnswer = String(responseAnswer.answer);
+                }
+              }
+              break;
+              
+            default:
+              formattedAnswer = String(responseAnswer.answer);
           }
+          
+          row.push(formattedAnswer);
         } else {
-          row.push("");
+          row.push("No response");
         }
       });
 
       return row;
     });
 
-    // Convert to CSV string
+    // Convert to CSV string with proper escaping
     const csvContent = [headers, ...rows]
       .map((row) =>
-        row.map((field) => `"${String(field).replace(/"/g, '""')}"`).join(","),
+        row.map((field) => {
+          const stringField = String(field || "");
+          // Escape quotes and wrap in quotes if contains comma, quote, or newline
+          if (stringField.includes(',') || stringField.includes('"') || stringField.includes('\n')) {
+            return `"${stringField.replace(/"/g, '""')}"`;
+          }
+          return stringField;
+        }).join(",")
       )
       .join("\n");
 
-    res.setHeader("Content-Type", "text/csv");
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="${survey.title}-responses.csv"`,
-    );
-    res.send(csvContent);
+    // Add BOM for proper UTF-8 encoding in Excel
+    const csvWithBOM = '\uFEFF' + csvContent;
+
+    // Set response headers for file download
+    const fileName = `${survey.title.replace(/[^a-zA-Z0-9]/g, '_')}_responses_${new Date().toISOString().split('T')[0]}.csv`;
+    
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+    res.setHeader("Content-Length", Buffer.byteLength(csvWithBOM, 'utf8'));
+    
+    res.send(csvWithBOM);
   } catch (error) {
     console.error("Export responses error:", error);
     res.status(500).json({

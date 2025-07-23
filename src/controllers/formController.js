@@ -195,6 +195,7 @@ export const updateForm = async (req, res) => {
 export const deleteForm = async (req, res) => {
   try {
     const existingForm = await SurveyForm.findById(req.params.id);
+
     if (!existingForm) {
       return res.status(404).json({
         success: false,
@@ -203,8 +204,23 @@ export const deleteForm = async (req, res) => {
       });
     }
 
-    // Check ownership or admin privilege
-    if (existingForm.authorId?.toString() !== req.userId.toString() && req.user.role !== "admin") {
+    // Add detailed logging for debugging
+    console.log("Delete form attempt:");
+    console.log("- Form ID:", req.params.id);
+    console.log("- Form author ID:", existingForm.authorId);
+    console.log("- User ID from request:", req.userId);
+    console.log("- User role:", req.user.role);
+
+    const formAuthorId = existingForm.authorId?.toString();
+    const requestUserId = req.userId?.toString();
+    
+    console.log("- String comparison:", formAuthorId === requestUserId);
+
+    // Check ownership or admin privilege with more robust comparison
+    const isOwner = formAuthorId && requestUserId && formAuthorId === requestUserId;
+    const isAdmin = req.user && req.user.role === "admin";
+    
+    if (!isOwner && !isAdmin) {
       return res.status(403).json({
         success: false,
         message: "Access denied. You can only delete your own forms.",
@@ -212,11 +228,7 @@ export const deleteForm = async (req, res) => {
       });
     }
 
-    const form = await SurveyForm.findByIdAndUpdate(
-      req.params.id,
-      { isActive: false },
-      { new: true },
-    );
+    await SurveyForm.findByIdAndDelete(req.params.id);
 
     res.json({
       success: true,
@@ -337,20 +349,277 @@ export const getFormStats = async (req, res) => {
 // @access  Private (requires brand role)
 export const getBrandForms = async (req, res) => {
   try {
-    if (!req.user || !req.user.brandId) {
-      return res.status(401).json({
-        success: false,
-        message: "Unauthorized access",
-        error: "UNAUTHORIZED",
-      });
-    }
-    const forms = await getAllForms(req.user.brandId);
+    // Assuming you have a method to get all forms by brand ID
+    const { limit = 20, page = 1 } = req.query;
+    const skip = (page - 1) * limit;
+
+    const query = { 
+      authorId: req.userId,
+      isActive: true 
+    };
+
+    const forms = await SurveyForm.find(query)
+      .select("-questions") // Optional: exclude questions for performance
+      .sort({ createdAt: -1 })
+      .limit(parseInt(limit))
+      .skip(skip)
+      .populate("authorId", "name email");
+
+    const total = await SurveyForm.countDocuments(query);
+    const pages = Math.ceil(total / limit);
+
     res.json({
       success: true,
-      forms,
+      data: forms,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages,
+      },
     });
   } catch (error) {
     console.error("Error fetching brand forms:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
+};
+
+// @desc    Change form status
+// @route   PATCH /api/forms/:id/status
+// @access  Private (requires ownership or admin)
+export const changeFormStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    // Validate status
+    const validStatuses = ["draft", "published", "scheduled", "closed"];
+    if (!status || !validStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid status. Must be one of: draft, published, scheduled, closed",
+        error: "INVALID_STATUS"
+      });
+    }
+
+    // Check if form exists
+    const existingForm = await SurveyForm.findById(id);
+    if (!existingForm) {
+      return res.status(404).json({
+        success: false,
+        message: "Form not found",
+        error: "FORM_NOT_FOUND"
+      });
+    }
+
+    // Check ownership or admin privilege
+    if (existingForm.authorId?.toString() !== req.userId.toString() && req.user.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. You can only change status of your own forms.",
+        error: "OWNERSHIP_REQUIRED"
+      });
+    }
+
+    // Additional validation for status changes
+    if (status === "published") {
+      const now = new Date();
+      if (existingForm.publishDate > now) {
+        return res.status(400).json({
+          success: false,
+          message: "Cannot publish form before its publish date",
+          error: "PUBLISH_DATE_NOT_REACHED"
+        });
+      }
+      if (existingForm.expiryDate <= now) {
+        return res.status(400).json({
+          success: false,
+          message: "Cannot publish form after its expiry date",
+          error: "FORM_EXPIRED"
+        });
+      }
+    }
+
+    // Update the form status
+    const updatedForm = await SurveyForm.findByIdAndUpdate(
+      id,
+      { status },
+      { new: true, runValidators: true }
+    ).select("-questions"); // Don't return questions for performance
+
+    res.json({
+      success: true,
+      message: `Form status changed to ${status} successfully`,
+      data: {
+        id: updatedForm._id,
+        title: updatedForm.title,
+        status: updatedForm.status,
+        publishDate: updatedForm.publishDate,
+        expiryDate: updatedForm.expiryDate,
+        updatedAt: updatedForm.updatedAt
+      }
+    });
+  } catch (error) {
+    console.error("Change form status error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
+};
+
+// @desc    Publish form (shortcut for status change)
+// @route   PATCH /api/forms/:id/publish
+// @access  Private (requires ownership or admin)
+export const publishForm = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const existingForm = await SurveyForm.findById(id);
+    if (!existingForm) {
+      return res.status(404).json({
+        success: false,
+        message: "Form not found",
+        error: "FORM_NOT_FOUND"
+      });
+    }
+
+    // Check ownership
+    if (existingForm.authorId?.toString() !== req.userId.toString() && req.user.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. You can only publish your own forms.",
+        error: "OWNERSHIP_REQUIRED"
+      });
+    }
+
+    // Validate dates
+    const now = new Date();
+    if (existingForm.publishDate > now) {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot publish form before its publish date",
+        error: "PUBLISH_DATE_NOT_REACHED"
+      });
+    }
+    if (existingForm.expiryDate <= now) {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot publish form after its expiry date",
+        error: "FORM_EXPIRED"
+      });
+    }
+
+    const updatedForm = await SurveyForm.findByIdAndUpdate(
+      id,
+      { status: "published" },
+      { new: true }
+    ).select("title status publishDate expiryDate updatedAt");
+
+    res.json({
+      success: true,
+      message: "Form published successfully",
+      data: updatedForm
+    });
+  } catch (error) {
+    console.error("Publish form error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
+};
+
+// @desc    Unpublish form (set to draft)
+// @route   PATCH /api/forms/:id/unpublish
+// @access  Private (requires ownership or admin)
+export const unpublishForm = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const existingForm = await SurveyForm.findById(id);
+    if (!existingForm) {
+      return res.status(404).json({
+        success: false,
+        message: "Form not found",
+        error: "FORM_NOT_FOUND"
+      });
+    }
+
+    // Check ownership
+    if (existingForm.authorId?.toString() !== req.userId.toString() && req.user.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. You can only unpublish your own forms.",
+        error: "OWNERSHIP_REQUIRED"
+      });
+    }
+
+    const updatedForm = await SurveyForm.findByIdAndUpdate(
+      id,
+      { status: "draft" },
+      { new: true }
+    ).select("title status publishDate expiryDate updatedAt");
+
+    res.json({
+      success: true,
+      message: "Form unpublished successfully (set to draft)",
+      data: updatedForm
+    });
+  } catch (error) {
+    console.error("Unpublish form error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
+};
+
+// @desc    Close form (set to closed)
+// @route   PATCH /api/forms/:id/close
+// @access  Private (requires ownership or admin)
+export const closeForm = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const existingForm = await SurveyForm.findById(id);
+    if (!existingForm) {
+      return res.status(404).json({
+        success: false,
+        message: "Form not found",
+        error: "FORM_NOT_FOUND"
+      });
+    }
+
+    // Check ownership
+    if (existingForm.authorId?.toString() !== req.userId.toString() && req.user.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. You can only close your own forms.",
+        error: "OWNERSHIP_REQUIRED"
+      });
+    }
+
+    const updatedForm = await SurveyForm.findByIdAndUpdate(
+      id,
+      { status: "closed" },
+      { new: true }
+    ).select("title status publishDate expiryDate updatedAt");
+
+    res.json({
+      success: true,
+      message: "Form closed successfully",
+      data: updatedForm
+    });
+  } catch (error) {
+    console.error("Close form error:", error);
     res.status(500).json({
       success: false,
       message: "Server error",

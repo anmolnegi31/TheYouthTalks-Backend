@@ -3,6 +3,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import connectDB from "./src/config/database.js";
 import seedDatabase from "./src/config/seedData.js";
+import { initializeCleanupSchedulers } from "./src/services/scheduler.js";
 
 // Import routes - using correct file names
 import user from "./src/routes/user.js";
@@ -19,6 +20,9 @@ await connectDB();
 
 // Seed database with initial data (only runs if collections are empty)
 await seedDatabase();
+
+// Initialize token cleanup schedulers
+initializeCleanupSchedulers();
 
 // Middleware
 app.use(
@@ -150,6 +154,7 @@ app.listen(PORT, () => {
   console.log(`🌐 Environment: ${process.env.NODE_ENV || "development"}`);
   console.log(`📡 API Base URL: http://localhost:${PORT}/api`);
   console.log(`🏥 Health Check: http://localhost:${PORT}/health`);
+  console.log(`🔄 Token cleanup schedulers initialized and running`);
 });
 
 export default app;

@@ -345,7 +345,7 @@ export const extractTokenFromHeader = (authHeader) => {
 
   const parts = authHeader.split(" ");
   if (parts.length === 2 && parts[0] === "Bearer") {
-    console.log("Extracted token:", parts[1]);
+    // console.log("Extracted token:", parts[1]);
     return parts[1];
   }
 
